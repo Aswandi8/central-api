@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { isSafeRemoteMediaUrlSyntax } from "@/lib/security/remote-media-url";
+
 // ============================================================
 // CONSTANTS
 // ============================================================
@@ -15,7 +17,7 @@ export const SOCIAL_SHARE_SORT_FIELDS = [
 ] as const;
 
 // ============================================================
-// URL
+// GENERIC HTTP URL
 // ============================================================
 
 function isHttpUrl(value: string): boolean {
@@ -28,6 +30,10 @@ function isHttpUrl(value: string): boolean {
   }
 }
 
+// ============================================================
+// TARGET URL
+// ============================================================
+
 const requiredHttpUrlSchema = z
   .string()
   .trim()
@@ -37,7 +43,20 @@ const requiredHttpUrlSchema = z
     message: "URL must use http or https",
   });
 
-const nullableHttpUrlSchema = z
+// ============================================================
+// REMOTE MEDIA URL
+// ============================================================
+
+const requiredRemoteMediaUrlSchema = z
+  .string()
+  .trim()
+  .min(1, "Media URL is required")
+  .max(2048, "Media URL must not exceed 2048 characters")
+  .refine(isSafeRemoteMediaUrlSyntax, {
+    message: "Media URL must be a public http or https URL",
+  });
+
+const nullableRemoteMediaUrlSchema = z
   .union([z.string(), z.null()])
   .optional()
   .transform((value) => {
@@ -49,8 +68,8 @@ const nullableHttpUrlSchema = z
 
     return normalized || null;
   })
-  .refine((value) => value === null || isHttpUrl(value), {
-    message: "URL must use http or https",
+  .refine((value) => value === null || isSafeRemoteMediaUrlSyntax(value), {
+    message: "Media URL must be a public http or https URL",
   });
 
 // ============================================================
@@ -133,16 +152,24 @@ export const createSocialShareSchema = z.object({
 
   description: nullableTextSchema,
 
-  videoUrl: requiredHttpUrlSchema,
-
-  thumbnail: requiredHttpUrlSchema,
-
-  shareThumbnail: nullableHttpUrlSchema,
-
   /*
-   * Actual duration is stored
-   * as total seconds.
+   * Provider agnostic.
+   *
+   * Examples:
+   *
+   * Cloudinary
+   * R2
+   * Bunny
+   * S3
+   * custom CDN
+   * public website
    */
+  videoUrl: requiredRemoteMediaUrlSchema,
+
+  thumbnail: requiredRemoteMediaUrlSchema,
+
+  shareThumbnail: nullableRemoteMediaUrlSchema,
+
   duration: z
     .number()
     .int()
@@ -150,15 +177,11 @@ export const createSocialShareSchema = z.object({
     .nullable()
     .optional(),
 
-  /*
-   * Display duration is visual-only.
-   *
-   * Examples:
-   * 12:48
-   * 01:12:48
-   */
   displayDuration: displayDurationSchema,
 
+  /*
+   * Destination URL is NOT downloaded by Central API.
+   */
   targetUrl: requiredHttpUrlSchema,
 
   status: z.enum(SOCIAL_SHARE_STATUSES).default("DRAFT"),
@@ -181,11 +204,11 @@ export const updateSocialShareSchema = z
 
     description: nullableTextSchema,
 
-    videoUrl: requiredHttpUrlSchema.optional(),
+    videoUrl: requiredRemoteMediaUrlSchema.optional(),
 
-    thumbnail: requiredHttpUrlSchema.optional(),
+    thumbnail: requiredRemoteMediaUrlSchema.optional(),
 
-    shareThumbnail: nullableHttpUrlSchema,
+    shareThumbnail: nullableRemoteMediaUrlSchema,
 
     duration: z
       .number()
@@ -208,15 +231,6 @@ export const updateSocialShareSchema = z
 // LIST QUERY
 // ============================================================
 
-/*
- * websiteId is intentionally OPTIONAL.
- *
- * No websiteId:
- * → All accessible websites.
- *
- * websiteId:
- * → One specific website.
- */
 export const socialSharesQuerySchema = z.object({
   websiteId: z.string().trim().min(1, "websiteId cannot be empty").optional(),
 
@@ -280,11 +294,12 @@ export const socialShareSelect = {
 } as const;
 
 // ============================================================
-// RECORD TYPE
+// RECORD
 // ============================================================
 
 interface SocialShareRecord {
   id: string;
+
   websiteId: string;
 
   title: string;
@@ -346,11 +361,6 @@ export function getSocialShareUrl(
     return null;
   }
 
-  /*
-   * Final public Social Share route:
-   *
-   * https://web-a.com/watch/video-123
-   */
   return `${baseUrl}/watch/` + encodeURIComponent(slug);
 }
 
@@ -434,6 +444,7 @@ export function getSocialShareOrderBy(
       } as const;
 
     case "createdAt":
+
     default:
       return {
         createdAt: order,

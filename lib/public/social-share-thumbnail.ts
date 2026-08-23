@@ -5,22 +5,38 @@ import { parse, type Font } from "opentype.js";
 
 import sharp from "sharp";
 
+import { assertSafeRemoteMediaUrl } from "@/lib/security/remote-media-url";
+
 // ============================================================
 // CONSTANTS
 // ============================================================
 
 const OUTPUT_WIDTH = 1200;
+
 const OUTPUT_HEIGHT = 630;
 
 const PLAY_RADIUS = 60;
 
 const DURATION_RIGHT = 32;
+
 const DURATION_BOTTOM = 28;
 
 const DURATION_HEIGHT = 50;
+
 const DURATION_PADDING_X = 16;
 
 const DURATION_FONT_SIZE = 26;
+
+const MAX_REDIRECTS = 5;
+
+/*
+ * Source thumbnail limit.
+ *
+ * Social thumbnail tidak perlu menerima image puluhan/ratusan MB.
+ */
+const MAX_SOURCE_BYTES = 15 * 1024 * 1024;
+
+const FETCH_TIMEOUT_MS = 10_000;
 
 // ============================================================
 // FONT CACHE
@@ -71,35 +87,175 @@ function normalizeDuration(value: string | null | undefined): string {
 }
 
 // ============================================================
+// CONTENT LENGTH
+// ============================================================
+
+function validateContentLength(response: Response): void {
+  const raw = response.headers.get("content-length");
+
+  if (!raw) {
+    return;
+  }
+
+  const length = Number(raw);
+
+  if (Number.isFinite(length) && length > MAX_SOURCE_BYTES) {
+    throw new Error("Thumbnail source is too large");
+  }
+}
+
+// ============================================================
+// READ BODY WITH LIMIT
+// ============================================================
+
+async function readImageBody(response: Response): Promise<Buffer> {
+  /*
+   * Some CDNs don't send Content-Length,
+   * so we must enforce the size limit while reading.
+   */
+  if (!response.body) {
+    throw new Error("Thumbnail response has no body");
+  }
+
+  const reader = response.body.getReader();
+
+  const chunks: Uint8Array[] = [];
+
+  let total = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+
+      if (done) {
+        break;
+      }
+
+      if (!value) {
+        continue;
+      }
+
+      total += value.byteLength;
+
+      if (total > MAX_SOURCE_BYTES) {
+        throw new Error("Thumbnail source is too large");
+      }
+
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return Buffer.concat(
+    chunks.map((chunk) => Buffer.from(chunk)),
+    total,
+  );
+}
+
+// ============================================================
 // DOWNLOAD THUMBNAIL
 // ============================================================
 
-async function downloadImage(url: string): Promise<Buffer> {
-  const response = await fetch(url, {
-    method: "GET",
+async function downloadImage(initialUrl: string): Promise<Buffer> {
+  let currentUrl = initialUrl;
 
-    headers: {
-      Accept: "image/*",
-    },
+  for (
+    let redirectCount = 0;
+    redirectCount <= MAX_REDIRECTS;
+    redirectCount += 1
+  ) {
+    /*
+     * Validate every URL, including redirect targets.
+     */
+    const safeUrl = await assertSafeRemoteMediaUrl(currentUrl);
 
-    cache: "no-store",
-  });
+    const controller = new AbortController();
 
-  if (!response.ok) {
-    throw new Error(`Unable to download thumbnail (${response.status})`);
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+    let response: Response;
+
+    try {
+      response = await fetch(safeUrl, {
+        method: "GET",
+
+        headers: {
+          Accept: "image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8",
+        },
+
+        /*
+         * Important:
+         *
+         * We handle redirects ourselves so every
+         * destination can be checked against SSRF.
+         */
+        redirect: "manual",
+
+        cache: "no-store",
+
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new Error("Thumbnail request timed out");
+      }
+
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    // ========================================================
+    // REDIRECT
+    // ========================================================
+
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location");
+
+      if (!location) {
+        throw new Error(
+          "Thumbnail server returned a redirect without Location",
+        );
+      }
+
+      if (redirectCount >= MAX_REDIRECTS) {
+        throw new Error("Thumbnail URL redirected too many times");
+      }
+
+      currentUrl = new URL(location, safeUrl).toString();
+
+      continue;
+    }
+
+    // ========================================================
+    // HTTP
+    // ========================================================
+
+    if (!response.ok) {
+      throw new Error(`Unable to download thumbnail (${response.status})`);
+    }
+
+    // ========================================================
+    // CONTENT TYPE
+    // ========================================================
+
+    const contentType = response.headers.get("content-type");
+
+    if (!contentType || !contentType.toLowerCase().startsWith("image/")) {
+      throw new Error(
+        `Thumbnail URL returned invalid content type: ${
+          contentType ?? "missing"
+        }`,
+      );
+    }
+
+    validateContentLength(response);
+
+    return readImageBody(response);
   }
 
-  const contentType = response.headers.get("content-type");
-
-  if (contentType && !contentType.toLowerCase().startsWith("image/")) {
-    throw new Error(
-      `Thumbnail URL returned invalid content type: ${contentType}`,
-    );
-  }
-
-  const arrayBuffer = await response.arrayBuffer();
-
-  return Buffer.from(arrayBuffer);
+  throw new Error("Unable to resolve thumbnail URL");
 }
 
 // ============================================================
@@ -139,26 +295,6 @@ function measureDuration(font: Font, duration: string): number {
 function createDurationPath(duration: string) {
   const font = getDurationFont();
 
-  /*
-   * IMPORTANT:
-   *
-   * Jangan gunakan:
-   *
-   * font.getPath(duration, ...)
-   * font.getAdvanceWidth(duration, ...)
-   *
-   * karena keduanya dapat masuk ke GSUB shaping engine
-   * opentype.js.
-   *
-   * Inter memiliki lookup GSUB yang belum sepenuhnya
-   * didukung opentype.js.
-   *
-   * Untuk duration kita hanya membutuhkan:
-   *
-   * 0-9 dan :
-   *
-   * jadi glyph dirender satu per satu.
-   */
   const textWidth = measureDuration(font, duration);
 
   const badgeWidth = Math.max(
@@ -172,9 +308,6 @@ function createDurationPath(duration: string) {
 
   let cursorX = badgeX + (badgeWidth - textWidth) / 2;
 
-  /*
-   * opentype glyph path memakai baseline.
-   */
   const baseline = badgeY + 34;
 
   const paths: string[] = [];
@@ -207,10 +340,6 @@ function createOverlaySvg(displayDuration: string): Buffer {
 
   const { badgeWidth, badgeX, badgeY, pathData } = createDurationPath(duration);
 
-  // ==========================================================
-  // PLAY
-  // ==========================================================
-
   const centerX = OUTPUT_WIDTH / 2;
 
   const centerY = OUTPUT_HEIGHT / 2;
@@ -225,10 +354,6 @@ function createOverlaySvg(displayDuration: string): Buffer {
 
   const triangleBottom = centerY + 27;
 
-  // ==========================================================
-  // SVG
-  // ==========================================================
-
   const svg = `
     <svg
       width="${OUTPUT_WIDTH}"
@@ -236,8 +361,6 @@ function createOverlaySvg(displayDuration: string): Buffer {
       viewBox="0 0 ${OUTPUT_WIDTH} ${OUTPUT_HEIGHT}"
       xmlns="http://www.w3.org/2000/svg"
     >
-      <!-- Play shadow -->
-
       <circle
         cx="${centerX}"
         cy="${centerY + 3}"
@@ -245,16 +368,12 @@ function createOverlaySvg(displayDuration: string): Buffer {
         fill="rgba(0,0,0,0.22)"
       />
 
-      <!-- Play background -->
-
       <circle
         cx="${centerX}"
         cy="${centerY}"
         r="${PLAY_RADIUS}"
         fill="rgba(0,0,0,0.72)"
       />
-
-      <!-- Play triangle -->
 
       <polygon
         points="
@@ -265,8 +384,6 @@ function createOverlaySvg(displayDuration: string): Buffer {
         fill="#ffffff"
       />
 
-      <!-- Duration badge -->
-
       <rect
         x="${badgeX}"
         y="${badgeY}"
@@ -276,14 +393,6 @@ function createOverlaySvg(displayDuration: string): Buffer {
         ry="7"
         fill="rgba(0,0,0,0.82)"
       />
-
-      <!--
-        Inter glyphs converted to vector paths.
-
-        Sharp / librsvg tidak perlu merender font.
-        opentype.js juga tidak menjalankan GSUB shaping
-        karena glyph kita ambil satu per satu.
-      -->
 
       <path
         d="${pathData}"
@@ -313,7 +422,12 @@ export async function generateSocialShareThumbnail({
 
   const overlay = createOverlaySvg(duration);
 
-  return sharp(source)
+  return sharp(source, {
+    /*
+     * Avoid decompression bombs / gigantic pixel images.
+     */
+    limitInputPixels: 40_000_000,
+  })
     .rotate()
 
     .resize(OUTPUT_WIDTH, OUTPUT_HEIGHT, {
