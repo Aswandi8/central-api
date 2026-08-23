@@ -10,6 +10,24 @@ import { generateSocialShareThumbnail } from "@/lib/public/social-share-thumbnai
 import { prisma } from "@/lib/prisma";
 
 // ============================================================
+// RUNTIME
+// ============================================================
+
+/*
+ * IMPORTANT:
+ *
+ * Endpoint ini menggunakan:
+ *
+ * - sharp
+ * - fs
+ * - Buffer
+ * - opentype.js
+ *
+ * Jadi wajib Node.js runtime.
+ */
+export const runtime = "nodejs";
+
+// ============================================================
 // ROUTE CONTEXT
 // ============================================================
 
@@ -24,6 +42,10 @@ interface RouteContext {
 // ============================================================
 
 export async function GET(request: Request, context: RouteContext) {
+  // ==========================================================
+  // PARAMS
+  // ==========================================================
+
   const { slug } = await context.params;
 
   const normalizedSlug = slug.trim();
@@ -32,6 +54,7 @@ export async function GET(request: Request, context: RouteContext) {
     return NextResponse.json(
       {
         success: false,
+
         error: "slug is required",
       },
       {
@@ -41,7 +64,7 @@ export async function GET(request: Request, context: RouteContext) {
   }
 
   // ==========================================================
-  // DOMAIN
+  // QUERY
   // ==========================================================
 
   const url = new URL(request.url);
@@ -63,12 +86,17 @@ export async function GET(request: Request, context: RouteContext) {
     );
   }
 
+  // ==========================================================
+  // DOMAIN
+  // ==========================================================
+
   const requestedDomain = normalizeWebsiteDomain(parsed.data.domain);
 
   if (!requestedDomain) {
     return NextResponse.json(
       {
         success: false,
+
         error: "Invalid domain",
       },
       {
@@ -81,6 +109,15 @@ export async function GET(request: Request, context: RouteContext) {
   // WEBSITE
   // ==========================================================
 
+  /*
+   * Website.domain saat ini mungkin tersimpan sebagai:
+   *
+   * arvane.com
+   * https://arvane.com
+   * https://arvane.com/
+   *
+   * Maka kita normalize sebelum dibandingkan.
+   */
   const websites = await prisma.website.findMany({
     where: {
       status: "ACTIVE",
@@ -92,6 +129,7 @@ export async function GET(request: Request, context: RouteContext) {
 
     select: {
       id: true,
+
       domain: true,
     },
   });
@@ -104,6 +142,7 @@ export async function GET(request: Request, context: RouteContext) {
     return NextResponse.json(
       {
         success: false,
+
         error: "Social share not found",
       },
       {
@@ -142,6 +181,7 @@ export async function GET(request: Request, context: RouteContext) {
     return NextResponse.json(
       {
         success: false,
+
         error: "Social share not found",
       },
       {
@@ -151,9 +191,17 @@ export async function GET(request: Request, context: RouteContext) {
   }
 
   // ==========================================================
-  // SOURCE
+  // SOURCE THUMBNAIL
   // ==========================================================
 
+  /*
+   * Priority:
+   *
+   * 1. shareThumbnail
+   * 2. thumbnail
+   *
+   * Generated overlay akan ditambahkan setelahnya.
+   */
   const sourceThumbnail = socialShare.shareThumbnail ?? socialShare.thumbnail;
 
   // ==========================================================
@@ -168,8 +216,8 @@ export async function GET(request: Request, context: RouteContext) {
     });
 
     /*
-     * Web Response BodyInit accepts Uint8Array cleanly
-     * in Next.js/TypeScript.
+     * Response Web API lebih aman dengan Uint8Array
+     * daripada Node Buffer.
      */
     const body = new Uint8Array(image);
 
@@ -181,21 +229,69 @@ export async function GET(request: Request, context: RouteContext) {
 
         "Content-Length": String(body.byteLength),
 
+        /*
+         * Jangan immutable karena:
+         *
+         * - thumbnail dapat berubah
+         * - displayDuration dapat berubah
+         *
+         * selama Social Share masih editable.
+         */
         "Cache-Control":
           "public, max-age=300, s-maxage=300, stale-while-revalidate=3600",
       },
     });
   } catch (error) {
-    console.error("[SOCIAL SHARE THUMBNAIL]", error);
+    // ========================================================
+    // ERROR LOG
+    // ========================================================
+
+    const message = error instanceof Error ? error.message : String(error);
+
+    const stack = error instanceof Error ? error.stack : undefined;
+
+    console.error("[SOCIAL SHARE THUMBNAIL]", {
+      slug: normalizedSlug,
+
+      domain: requestedDomain,
+
+      sourceThumbnail,
+
+      displayDuration: socialShare.displayDuration,
+
+      message,
+
+      stack,
+    });
+
+    // ========================================================
+    // ERROR RESPONSE
+    // ========================================================
 
     return NextResponse.json(
       {
         success: false,
 
         error: "Unable to generate social share thumbnail",
+
+        /*
+         * Development saja.
+         *
+         * Production detail tetap disembunyikan,
+         * tetapi error lengkap tersedia di Vercel Logs.
+         */
+        ...(process.env.NODE_ENV === "development"
+          ? {
+              detail: message,
+            }
+          : {}),
       },
       {
         status: 502,
+
+        headers: {
+          "Cache-Control": "no-store",
+        },
       },
     );
   }
