@@ -1,26 +1,41 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { parse, type Font } from "opentype.js";
+
 import sharp from "sharp";
+
+// ============================================================
+// CONSTANTS
+// ============================================================
 
 const OUTPUT_WIDTH = 1200;
 const OUTPUT_HEIGHT = 630;
 
-const PLAY_BUTTON_SIZE = 120;
-const PLAY_TRIANGLE_WIDTH = 42;
-const PLAY_TRIANGLE_HEIGHT = 52;
+const PLAY_RADIUS = 60;
 
 const DURATION_RIGHT = 32;
 const DURATION_BOTTOM = 28;
+
 const DURATION_HEIGHT = 50;
-const DURATION_HORIZONTAL_PADDING = 16;
+
+const DURATION_PADDING_X = 16;
+
 const DURATION_FONT_SIZE = 26;
 
-let cachedFontBase64: string | null = null;
+// ============================================================
+// FONT CACHE
+// ============================================================
 
-function getFontBase64(): string {
-  if (cachedFontBase64) {
-    return cachedFontBase64;
+let cachedFont: Font | null = null;
+
+// ============================================================
+// FONT
+// ============================================================
+
+function getDurationFont(): Font {
+  if (cachedFont) {
+    return cachedFont;
   }
 
   const fontPath = path.join(
@@ -31,91 +46,162 @@ function getFontBase64(): string {
   );
 
   if (!fs.existsSync(fontPath)) {
-    throw new Error(`Social share thumbnail font not found: ${fontPath}`);
+    throw new Error(`Social share font not found: ${fontPath}`);
   }
 
-  cachedFontBase64 = fs.readFileSync(fontPath).toString("base64");
+  const buffer = fs.readFileSync(fontPath);
 
-  return cachedFontBase64;
+  /*
+   * opentype.js membutuhkan ArrayBuffer yang tepat.
+   *
+   * Buffer Node.js bisa memakai backing ArrayBuffer dengan offset,
+   * jadi kita slice sesuai byteOffset dan byteLength.
+   */
+  const arrayBuffer = buffer.buffer.slice(
+    buffer.byteOffset,
+    buffer.byteOffset + buffer.byteLength,
+  ) as ArrayBuffer;
+
+  cachedFont = parse(arrayBuffer);
+
+  return cachedFont;
 }
 
-function escapeXml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&apos;");
-}
+// ============================================================
+// DURATION
+// ============================================================
 
 function normalizeDuration(value: string | null | undefined): string {
-  const duration = value?.trim();
+  const normalized = value?.trim().replace(/[^0-9:]/g, "");
 
-  if (!duration) {
-    return "00:00";
+  return normalized || "00:00";
+}
+
+// ============================================================
+// DOWNLOAD THUMBNAIL
+// ============================================================
+
+async function downloadImage(url: string): Promise<Buffer> {
+  const response = await fetch(url, {
+    method: "GET",
+
+    headers: {
+      Accept: "image/*",
+    },
+
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error(`Unable to download thumbnail (${response.status})`);
   }
 
-  return duration;
+  const contentType = response.headers.get("content-type");
+
+  if (contentType && !contentType.toLowerCase().startsWith("image/")) {
+    throw new Error(
+      `Thumbnail URL returned invalid content type: ${contentType}`,
+    );
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+
+  return Buffer.from(arrayBuffer);
 }
 
-function estimateDurationWidth(duration: string): number {
+// ============================================================
+// DURATION PATH
+// ============================================================
+
+function createDurationPath(duration: string) {
+  const font = getDurationFont();
+
   /*
-   * Inter Bold angka cukup konsisten untuk kebutuhan badge duration.
-   * Kita tetap memberi horizontal padding agar:
-   *
-   * 04:33
-   * 01:04:33
-   *
-   * sama-sama muat tanpa terpotong.
+   * Hitung lebar teks berdasarkan glyph asli Inter.
    */
-  const estimatedTextWidth = duration.length * DURATION_FONT_SIZE * 0.62;
+  const textWidth = font.getAdvanceWidth(duration, DURATION_FONT_SIZE, {
+    kerning: true,
+  });
 
-  return Math.max(
-    82,
-    Math.ceil(estimatedTextWidth + DURATION_HORIZONTAL_PADDING * 2),
+  const badgeWidth = Math.max(
+    90,
+    Math.ceil(textWidth + DURATION_PADDING_X * 2),
   );
+
+  const badgeX = OUTPUT_WIDTH - DURATION_RIGHT - badgeWidth;
+
+  const badgeY = OUTPUT_HEIGHT - DURATION_BOTTOM - DURATION_HEIGHT;
+
+  /*
+   * Horizontal center.
+   */
+  const textX = badgeX + (badgeWidth - textWidth) / 2;
+
+  /*
+   * getPath menggunakan baseline.
+   *
+   * Nilai ini disesuaikan supaya teks Inter terlihat
+   * berada di tengah badge secara visual.
+   */
+  const textBaseline = badgeY + 34;
+
+  const textPath = font.getPath(
+    duration,
+    textX,
+    textBaseline,
+    DURATION_FONT_SIZE,
+    {
+      kerning: true,
+    },
+  );
+
+  return {
+    badgeWidth,
+    badgeX,
+    badgeY,
+
+    /*
+     * Setelah teks menjadi path,
+     * Sharp tidak lagi membutuhkan font.
+     */
+    pathData: textPath.toPathData(2),
+  };
 }
 
-function createOverlaySvg(duration: string): Buffer {
-  const safeDuration = escapeXml(duration);
-  const fontBase64 = getFontBase64();
+// ============================================================
+// OVERLAY SVG
+// ============================================================
+
+function createOverlaySvg(displayDuration: string): Buffer {
+  const duration = normalizeDuration(displayDuration);
+
+  const { badgeWidth, badgeX, badgeY, pathData } = createDurationPath(duration);
+
+  // ==========================================================
+  // PLAY BUTTON POSITION
+  // ==========================================================
 
   const centerX = OUTPUT_WIDTH / 2;
+
   const centerY = OUTPUT_HEIGHT / 2;
 
-  const playCircleX = centerX;
-  const playCircleY = centerY;
-  const playCircleRadius = PLAY_BUTTON_SIZE / 2;
-
   /*
-   * Triangle sedikit digeser ke kanan agar secara visual
-   * terlihat benar-benar berada di tengah lingkaran.
+   * Triangle sedikit digeser ke kanan agar secara optik
+   * terlihat benar-benar di tengah lingkaran.
    */
   const triangleCenterX = centerX + 5;
-  const triangleCenterY = centerY;
 
-  const triangleLeft = triangleCenterX - PLAY_TRIANGLE_WIDTH / 2;
+  const triangleLeft = triangleCenterX - 19;
 
-  const triangleTop = triangleCenterY - PLAY_TRIANGLE_HEIGHT / 2;
+  const triangleRight = triangleCenterX + 25;
 
-  const triangleBottom = triangleCenterY + PLAY_TRIANGLE_HEIGHT / 2;
+  const triangleTop = centerY - 27;
 
-  const triangleRight = triangleCenterX + PLAY_TRIANGLE_WIDTH / 2;
+  const triangleBottom = centerY + 27;
 
-  const durationWidth = estimateDurationWidth(duration);
-
-  const durationX = OUTPUT_WIDTH - DURATION_RIGHT - durationWidth;
-
-  const durationY = OUTPUT_HEIGHT - DURATION_BOTTOM - DURATION_HEIGHT;
-
-  const durationTextX = durationX + durationWidth / 2;
-
-  /*
-   * Baseline dibuat sedikit di bawah center geometris
-   * supaya teks Inter terlihat center secara visual.
-   */
-  const durationTextY =
-    durationY + DURATION_HEIGHT / 2 + DURATION_FONT_SIZE * 0.35;
+  // ==========================================================
+  // SVG
+  // ==========================================================
 
   const svg = `
     <svg
@@ -124,132 +210,123 @@ function createOverlaySvg(duration: string): Buffer {
       viewBox="0 0 ${OUTPUT_WIDTH} ${OUTPUT_HEIGHT}"
       xmlns="http://www.w3.org/2000/svg"
     >
-      <defs>
-        <style>
-          @font-face {
-            font-family: "SocialShareInter";
-            src: url("data:font/ttf;base64,${fontBase64}") format("truetype");
-            font-style: normal;
-            font-weight: 700;
-          }
+      <!-- ================================================
+           PLAY SHADOW
+      ================================================= -->
 
-          .duration-text {
-            font-family: "SocialShareInter", sans-serif;
-            font-size: ${DURATION_FONT_SIZE}px;
-            font-style: normal;
-            font-weight: 700;
-          }
-        </style>
-      </defs>
-
-      <!-- Play button shadow -->
       <circle
-        cx="${playCircleX}"
-        cy="${playCircleY + 3}"
-        r="${playCircleRadius + 2}"
-        fill="rgba(0, 0, 0, 0.22)"
+        cx="${centerX}"
+        cy="${centerY + 3}"
+        r="${PLAY_RADIUS + 2}"
+        fill="rgba(0,0,0,0.22)"
       />
 
-      <!-- Play button -->
+      <!-- ================================================
+           PLAY BUTTON BACKGROUND
+      ================================================= -->
+
       <circle
-        cx="${playCircleX}"
-        cy="${playCircleY}"
-        r="${playCircleRadius}"
-        fill="rgba(0, 0, 0, 0.72)"
+        cx="${centerX}"
+        cy="${centerY}"
+        r="${PLAY_RADIUS}"
+        fill="rgba(0,0,0,0.72)"
       />
 
-      <!-- Play icon -->
+      <!-- ================================================
+           PLAY TRIANGLE
+      ================================================= -->
+
       <polygon
         points="
           ${triangleLeft},${triangleTop}
-          ${triangleRight},${triangleCenterY}
+          ${triangleRight},${centerY}
           ${triangleLeft},${triangleBottom}
         "
         fill="#ffffff"
       />
 
-      <!-- Duration badge -->
+      <!-- ================================================
+           DURATION BADGE
+      ================================================= -->
+
       <rect
-        x="${durationX}"
-        y="${durationY}"
-        width="${durationWidth}"
+        x="${badgeX}"
+        y="${badgeY}"
+        width="${badgeWidth}"
         height="${DURATION_HEIGHT}"
         rx="7"
         ry="7"
-        fill="rgba(0, 0, 0, 0.82)"
+        fill="rgba(0,0,0,0.82)"
       />
 
-      <!-- Duration text -->
-      <text
-        x="${durationTextX}"
-        y="${durationTextY}"
-        text-anchor="middle"
-        class="duration-text"
+      <!-- ================================================
+           INTER GLYPHS AS VECTOR PATH
+      ================================================= -->
+
+      <path
+        d="${pathData}"
         fill="#ffffff"
-      >${safeDuration}</text>
+      />
     </svg>
   `;
 
   return Buffer.from(svg);
 }
 
+// ============================================================
+// GENERATOR
+// ============================================================
+
 export async function generateSocialShareThumbnail({
   thumbnailUrl,
   displayDuration,
 }: {
   thumbnailUrl: string;
-  displayDuration?: string | null;
+
+  displayDuration: string | null;
 }): Promise<Buffer> {
+  const source = await downloadImage(thumbnailUrl);
+
   const duration = normalizeDuration(displayDuration);
-
-  let thumbnailResponse: Response;
-
-  try {
-    thumbnailResponse = await fetch(thumbnailUrl, {
-      cache: "no-store",
-    });
-  } catch (error) {
-    console.error("[SOCIAL SHARE THUMBNAIL FETCH]", error);
-
-    throw new Error("Unable to fetch social share thumbnail.");
-  }
-
-  if (!thumbnailResponse.ok) {
-    throw new Error(
-      `Unable to fetch social share thumbnail (${thumbnailResponse.status}).`,
-    );
-  }
-
-  const contentType = thumbnailResponse.headers.get("content-type");
-
-  if (contentType && !contentType.toLowerCase().startsWith("image/")) {
-    throw new Error(
-      `Invalid social share thumbnail content type: ${contentType}`,
-    );
-  }
-
-  const arrayBuffer = await thumbnailResponse.arrayBuffer();
-
-  const thumbnailBuffer = Buffer.from(arrayBuffer);
 
   const overlay = createOverlaySvg(duration);
 
-  return sharp(thumbnailBuffer)
-    .rotate()
-    .resize(OUTPUT_WIDTH, OUTPUT_HEIGHT, {
-      fit: "cover",
-      position: "centre",
-    })
-    .composite([
-      {
-        input: overlay,
-        top: 0,
-        left: 0,
-      },
-    ])
-    .jpeg({
-      quality: 90,
-      chromaSubsampling: "4:4:4",
-    })
-    .toBuffer();
+  return (
+    sharp(source)
+      /*
+       * Respect EXIF orientation.
+       */
+      .rotate()
+
+      /*
+       * Social preview size.
+       */
+      .resize(OUTPUT_WIDTH, OUTPUT_HEIGHT, {
+        fit: "cover",
+
+        position: "centre",
+      })
+
+      /*
+       * Add play button + fake duration.
+       */
+      .composite([
+        {
+          input: overlay,
+
+          top: 0,
+          left: 0,
+        },
+      ])
+
+      /*
+       * Keep PNG because our public endpoint
+       * currently returns Content-Type image/png.
+       */
+      .png({
+        compressionLevel: 9,
+      })
+
+      .toBuffer()
+  );
 }
