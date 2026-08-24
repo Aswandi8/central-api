@@ -71,7 +71,6 @@ enum ShortLinkStatus {
 }
 
 enum ShortLinkPreviewType {
-  NONE
   IMAGE
   VIDEO
 }
@@ -185,7 +184,7 @@ model UserInvitation {
   id String @id @default(cuid())
 
   userId String?
-  user   User?   @relation("InvitationUser", fields: [userId], references: [id], onDelete: Cascade)
+  user   User? @relation("InvitationUser", fields: [userId], references: [id], onDelete: Cascade)
 
   name  String
   email String
@@ -194,7 +193,7 @@ model UserInvitation {
   website   Website @relation(fields: [websiteId], references: [id], onDelete: Cascade)
 
   roleId String
-  role   Role   @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  role   Role @relation(fields: [roleId], references: [id], onDelete: Restrict)
 
   tokenHash String @unique
 
@@ -203,7 +202,7 @@ model UserInvitation {
   revokedAt DateTime?
 
   invitedById String?
-  invitedBy   User?   @relation("InvitationInviter", fields: [invitedById], references: [id], onDelete: SetNull)
+  invitedBy   User? @relation("InvitationInviter", fields: [invitedById], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -478,7 +477,7 @@ model ShortLink {
   slug           String               @unique
   destinationUrl String
   status         ShortLinkStatus      @default(ACTIVE)
-  previewType    ShortLinkPreviewType @default(NONE)
+  previewType    ShortLinkPreviewType
 
   title       String?
   description String?
@@ -502,7 +501,7 @@ model ShortLink {
   clickCount Int @default(0)
 
   createdById String?
-  createdBy   User?   @relation("ShortLinkCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy   User? @relation("ShortLinkCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 
   clicks ShortLinkClick[]
 

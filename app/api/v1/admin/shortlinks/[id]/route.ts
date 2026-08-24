@@ -306,6 +306,7 @@ export async function PUT(request: Request, context: RouteContext) {
       destinationUrl: true,
       status: true,
       previewType: true,
+
       title: true,
       description: true,
 

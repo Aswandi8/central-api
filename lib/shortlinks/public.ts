@@ -3,7 +3,6 @@ import { hashShortLinkIp } from "@/lib/shortlinks/ip-hash";
 import type { ShortLinkRequestInfo } from "@/lib/shortlinks/request";
 
 const HUMAN_DUPLICATE_WINDOW_MS = 3_000;
-
 const NON_HUMAN_DUPLICATE_WINDOW_MS = 30_000;
 
 export const PUBLIC_SHORTLINK_SELECT = {

@@ -2,7 +2,7 @@ import { randomBytes } from "crypto";
 import { z } from "zod";
 
 export const SHORTLINK_STATUSES = ["ACTIVE", "INACTIVE"] as const;
-export const SHORTLINK_PREVIEW_TYPES = ["NONE", "IMAGE", "VIDEO"] as const;
+export const SHORTLINK_PREVIEW_TYPES = ["IMAGE", "VIDEO"] as const;
 
 export const SHORTLINK_SORT_FIELDS = [
   "slug",
@@ -67,7 +67,7 @@ export const shortLinkCreateSchema = z.object({
     ),
 
   status: z.enum(SHORTLINK_STATUSES).optional().default("ACTIVE"),
-  previewType: z.enum(SHORTLINK_PREVIEW_TYPES).optional().default("NONE"),
+  previewType: z.enum(SHORTLINK_PREVIEW_TYPES),
 
   title: optionalText(200),
   description: optionalText(1000),
@@ -191,23 +191,13 @@ export function createRandomShortLinkSlug(): string {
 }
 
 export function validateShortLinkState(state: ShortLinkState): string | null {
-  if (state.previewType === "NONE") {
-    return null;
-  }
-
-  if (state.previewType === "IMAGE") {
-    if (!state.thumbnailUrl) {
-      return "Thumbnail URL is required for IMAGE preview";
-    }
-
-    return null;
-  }
-
   if (!state.thumbnailUrl) {
-    return "Thumbnail URL is required as VIDEO poster/fallback";
+    return state.previewType === "VIDEO"
+      ? "Thumbnail URL is required as VIDEO poster/fallback"
+      : "Thumbnail URL is required for IMAGE preview";
   }
 
-  if (!state.previewVideoUrl) {
+  if (state.previewType === "VIDEO" && !state.previewVideoUrl) {
     return "Preview video URL is required for VIDEO preview";
   }
 
@@ -215,25 +205,6 @@ export function validateShortLinkState(state: ShortLinkState): string | null {
 }
 
 export function normalizeShortLinkMedia(state: ShortLinkState): ShortLinkState {
-  if (state.previewType === "NONE") {
-    return {
-      ...state,
-      thumbnailUrl: null,
-      thumbnailWidth: null,
-      thumbnailHeight: null,
-      thumbnailMimeType: null,
-      thumbnailSizeBytes: null,
-      previewVideoUrl: null,
-      previewVideoWidth: null,
-      previewVideoHeight: null,
-      previewVideoDurationMs: null,
-      previewVideoMimeType: null,
-      previewVideoSizeBytes: null,
-      showPlayButton: false,
-      displayDuration: null,
-    };
-  }
-
   if (state.previewType === "IMAGE") {
     return {
       ...state,

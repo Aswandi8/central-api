@@ -56,9 +56,7 @@ export async function GET(request: Request) {
       : undefined;
 
   const previewType: ShortLinkPreviewType | undefined =
-    previewTypeParam === "NONE" ||
-    previewTypeParam === "IMAGE" ||
-    previewTypeParam === "VIDEO"
+    previewTypeParam === "IMAGE" || previewTypeParam === "VIDEO"
       ? previewTypeParam
       : undefined;
 
