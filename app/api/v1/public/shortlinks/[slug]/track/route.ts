@@ -99,7 +99,6 @@ export async function POST(request: Request, context: RouteContext) {
     return NextResponse.json(
       {
         success: true,
-
         data: {
           destinationUrl: resolved.shortLink.destinationUrl,
 
@@ -116,6 +115,16 @@ export async function POST(request: Request, context: RouteContext) {
           counted: tracking.counted,
 
           clickCount: tracking.clickCount,
+
+          /*
+           * Social crawler membutuhkan metadata ShortLink.
+           *
+           * Kita sudah resolve ShortLink di request ini,
+           * jadi jangan meminta Veyra melakukan GET kedua.
+           */
+          shortLink: requestInfo.visitor.socialCrawler
+            ? resolved.shortLink
+            : null,
         },
       },
       {
@@ -125,15 +134,14 @@ export async function POST(request: Request, context: RouteContext) {
     );
   } catch (error) {
     /*
-     * Analytics failure tidak boleh
-     * mematikan redirect.
+     * Analytics failure tidak boleh mematikan redirect
+     * maupun social metadata.
      */
     console.error("[PUBLIC SHORTLINK TRACK]", error);
 
     return NextResponse.json(
       {
         success: true,
-
         data: {
           destinationUrl: resolved.shortLink.destinationUrl,
 
@@ -147,6 +155,10 @@ export async function POST(request: Request, context: RouteContext) {
           duplicate: false,
           counted: false,
           clickCount: null,
+
+          shortLink: requestInfo.visitor.socialCrawler
+            ? resolved.shortLink
+            : null,
         },
       },
       {
