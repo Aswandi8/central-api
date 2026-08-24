@@ -14,6 +14,10 @@ const VALID_STATUSES = ["ACTIVE", "INACTIVE", "SUSPENDED", "BANNED"] as const;
 
 type UserStatus = (typeof VALID_STATUSES)[number];
 
+// ============================================================
+// GET
+// ============================================================
+
 export async function GET(request: Request, context: RouteContext) {
   const auth = await requirePermission(request, "user.read");
 
@@ -31,82 +35,96 @@ export async function GET(request: Request, context: RouteContext) {
 
   const { id } = await context.params;
 
-  /* =========================================================
-     USER
-  ========================================================= */
+  // ==========================================================
+  // USER + ACTIVE SESSIONS
+  // ==========================================================
 
-  const user = await prisma.user.findUnique({
-    where: {
-      id,
-    },
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      emailVerified: true,
-      image: true,
-      status: true,
-      role: true,
-      banned: true,
-      banReason: true,
-      banExpires: true,
-      createdAt: true,
-      updatedAt: true,
+  const [user, activeSessions] = await Promise.all([
+    prisma.user.findUnique({
+      where: {
+        id,
+      },
 
-      globalRoles: {
-        select: {
-          role: {
-            select: {
-              id: true,
-              name: true,
-              description: true,
-              scope: true,
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        emailVerified: true,
+        image: true,
+        status: true,
+        role: true,
+        banned: true,
+        banReason: true,
+        banExpires: true,
+        createdAt: true,
+        updatedAt: true,
+
+        globalRoles: {
+          select: {
+            role: {
+              select: {
+                id: true,
+                name: true,
+                description: true,
+                scope: true,
+              },
             },
           },
         },
-      },
 
-      websiteRoles: {
-        orderBy: {
-          website: {
-            name: "asc",
-          },
-        },
-        select: {
-          createdAt: true,
-
-          website: {
-            select: {
-              id: true,
-              name: true,
-              slug: true,
-              domain: true,
-              status: true,
+        websiteRoles: {
+          orderBy: {
+            website: {
+              name: "asc",
             },
           },
 
-          role: {
-            select: {
-              id: true,
-              name: true,
-              description: true,
-              scope: true,
+          select: {
+            createdAt: true,
+
+            website: {
+              select: {
+                id: true,
+                name: true,
+                slug: true,
+                domain: true,
+                status: true,
+              },
+            },
+
+            role: {
+              select: {
+                id: true,
+                name: true,
+                description: true,
+                scope: true,
+              },
             },
           },
         },
-      },
 
-      _count: {
-        select: {
-          accounts: true,
-          globalRoles: true,
-          websiteRoles: true,
-          auditLogs: true,
-          invitations: true,
+        _count: {
+          select: {
+            accounts: true,
+            globalRoles: true,
+            websiteRoles: true,
+            auditLogs: true,
+            invitations: true,
+          },
         },
       },
-    },
-  });
+    }),
+
+    prisma.session.count({
+      where: {
+        userId: id,
+
+        expiresAt: {
+          gt: new Date(),
+        },
+      },
+    }),
+  ]);
 
   if (!user) {
     return NextResponse.json(
@@ -120,25 +138,13 @@ export async function GET(request: Request, context: RouteContext) {
     );
   }
 
-  /* =========================================================
-     ACTIVE SESSIONS
-  ========================================================= */
-
-  const activeSessions = await prisma.session.count({
-    where: {
-      userId: user.id,
-      expiresAt: {
-        gt: new Date(),
-      },
-    },
-  });
-
-  /* =========================================================
-     ROLES
-  ========================================================= */
+  // ==========================================================
+  // ROLES
+  // ==========================================================
 
   const allRoles = [
     ...user.globalRoles.map((assignment) => assignment.role),
+
     ...user.websiteRoles.map((assignment) => assignment.role),
   ];
 
@@ -146,9 +152,9 @@ export async function GET(request: Request, context: RouteContext) {
     ...new Map(allRoles.map((role) => [role.id, role])).values(),
   ];
 
-  /* =========================================================
-     RESPONSE
-  ========================================================= */
+  // ==========================================================
+  // RESPONSE
+  // ==========================================================
 
   return NextResponse.json({
     success: true,
@@ -191,6 +197,10 @@ export async function GET(request: Request, context: RouteContext) {
   });
 }
 
+// ============================================================
+// PUT
+// ============================================================
+
 export async function PUT(request: Request, context: RouteContext) {
   const auth = await requirePermission(request, "user.update");
 
@@ -207,6 +217,10 @@ export async function PUT(request: Request, context: RouteContext) {
   }
 
   const { id } = await context.params;
+
+  // ==========================================================
+  // EXISTING USER
+  // ==========================================================
 
   const existingUser = await prisma.user.findUnique({
     where: {
@@ -247,6 +261,10 @@ export async function PUT(request: Request, context: RouteContext) {
     );
   }
 
+  // ==========================================================
+  // BODY
+  // ==========================================================
+
   let body: {
     name?: unknown;
     email?: unknown;
@@ -270,6 +288,10 @@ export async function PUT(request: Request, context: RouteContext) {
       },
     );
   }
+
+  // ==========================================================
+  // NORMALIZE
+  // ==========================================================
 
   const name =
     body.name === undefined
@@ -319,6 +341,10 @@ export async function PUT(request: Request, context: RouteContext) {
 
   let banExpires: Date | null = existingUser.banExpires;
 
+  // ==========================================================
+  // BAN EXPIRES
+  // ==========================================================
+
   if (body.banExpires !== undefined) {
     if (body.banExpires === null || body.banExpires === "") {
       banExpires = null;
@@ -350,6 +376,10 @@ export async function PUT(request: Request, context: RouteContext) {
       );
     }
   }
+
+  // ==========================================================
+  // VALIDATION
+  // ==========================================================
 
   if (!name) {
     return NextResponse.json(
@@ -411,10 +441,10 @@ export async function PUT(request: Request, context: RouteContext) {
     );
   }
 
-  /*
-   * Keep status dan Better Auth banned
-   * dalam kondisi konsisten.
-   */
+  // ==========================================================
+  // STATUS + BETTER AUTH BAN
+  // ==========================================================
+
   if (banned) {
     status = "BANNED";
   } else if (status === "BANNED") {
@@ -425,6 +455,10 @@ export async function PUT(request: Request, context: RouteContext) {
     banReason = null;
     banExpires = null;
   }
+
+  // ==========================================================
+  // PROTECTED SUPER ADMIN
+  // ==========================================================
 
   const protectedUser = isProtectedUser(existingUser.globalRoles);
 
@@ -439,6 +473,10 @@ export async function PUT(request: Request, context: RouteContext) {
       },
     );
   }
+
+  // ==========================================================
+  // DUPLICATE EMAIL
+  // ==========================================================
 
   const duplicateEmail = await prisma.user.findFirst({
     where: {
@@ -465,6 +503,10 @@ export async function PUT(request: Request, context: RouteContext) {
       },
     );
   }
+
+  // ==========================================================
+  // UPDATE
+  // ==========================================================
 
   const user = await prisma.user.update({
     where: {
@@ -532,13 +574,23 @@ export async function PUT(request: Request, context: RouteContext) {
     },
   });
 
+  // ==========================================================
+  // ROLES
+  // ==========================================================
+
   const roles = [
     ...user.globalRoles.map((assignment) => assignment.role),
+
     ...user.websiteRoles.map((assignment) => assignment.role),
   ];
 
+  // ==========================================================
+  // RESPONSE
+  // ==========================================================
+
   return NextResponse.json({
     success: true,
+
     message: "User updated successfully",
 
     data: {
@@ -561,11 +613,16 @@ export async function PUT(request: Request, context: RouteContext) {
 
       websiteRoles: user.websiteRoles.map((assignment) => ({
         website: assignment.website,
+
         role: assignment.role,
       })),
     },
   });
 }
+
+// ============================================================
+// DELETE
+// ============================================================
 
 export async function DELETE(request: Request, context: RouteContext) {
   const auth = await requirePermission(request, "user.delete");
@@ -583,6 +640,10 @@ export async function DELETE(request: Request, context: RouteContext) {
   }
 
   const { id } = await context.params;
+
+  // ==========================================================
+  // USER
+  // ==========================================================
 
   const user = await prisma.user.findUnique({
     where: {
@@ -618,10 +679,15 @@ export async function DELETE(request: Request, context: RouteContext) {
     );
   }
 
+  // ==========================================================
+  // PROTECTED SUPER ADMIN
+  // ==========================================================
+
   if (isProtectedUser(user.globalRoles)) {
     return NextResponse.json(
       {
         success: false,
+
         error: "SUPER_ADMIN account cannot be deleted",
       },
       {
@@ -630,14 +696,23 @@ export async function DELETE(request: Request, context: RouteContext) {
     );
   }
 
+  // ==========================================================
+  // DELETE
+  // ==========================================================
+
   await prisma.user.delete({
     where: {
       id,
     },
   });
 
+  // ==========================================================
+  // RESPONSE
+  // ==========================================================
+
   return NextResponse.json({
     success: true,
+
     message: "User deleted successfully",
 
     data: {

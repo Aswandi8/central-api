@@ -11,12 +11,17 @@ export async function GET(request: Request) {
       {
         success: false,
         error: auth.error,
+        code: auth.code,
       },
       {
         status: auth.status,
       },
     );
   }
+
+  // ==========================================================
+  // GLOBAL PERMISSIONS
+  // ==========================================================
 
   const globalPermissions = [
     ...new Set(
@@ -27,6 +32,10 @@ export async function GET(request: Request) {
       ),
     ),
   ];
+
+  // ==========================================================
+  // WEBSITE ACCESS
+  // ==========================================================
 
   const websiteAssignments = auth.isSuperAdmin
     ? []
@@ -80,8 +89,20 @@ export async function GET(request: Request) {
         },
       });
 
+  // ==========================================================
+  // RESPONSE
+  // ==========================================================
+
   return NextResponse.json({
     success: true,
+
+    session: {
+      id: auth.session.id,
+      userId: auth.session.userId,
+      expiresAt: auth.session.expiresAt,
+      createdAt: auth.session.createdAt,
+      updatedAt: auth.session.updatedAt,
+    },
 
     user: {
       id: auth.user.id,

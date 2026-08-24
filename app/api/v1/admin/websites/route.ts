@@ -7,8 +7,24 @@ import {
 } from "@/lib/admin/auth-admin";
 import { prisma } from "@/lib/prisma";
 
+const WEBSITE_STATUSES = ["ACTIVE", "INACTIVE", "MAINTENANCE"] as const;
+
+const WEBSITE_SORT_FIELDS = [
+  "name",
+  "domain",
+  "status",
+  "members",
+  "videos",
+  "createdAt",
+] as const;
+
+type WebsiteStatus = (typeof WEBSITE_STATUSES)[number];
+type WebsiteSortField = (typeof WEBSITE_SORT_FIELDS)[number];
+type SortOrder = "asc" | "desc";
+
 const createWebsiteSchema = z.object({
   name: z.string().trim().min(1, "Website name is required").max(100),
+
   slug: z
     .string()
     .trim()
@@ -18,7 +34,9 @@ const createWebsiteSchema = z.object({
       /^[a-z0-9]+(?:-[a-z0-9]+)*$/,
       "Slug may only contain lowercase letters, numbers, and hyphens",
     ),
+
   description: z.string().trim().max(1000).nullable().optional(),
+
   domain: z
     .string()
     .trim()
@@ -26,8 +44,17 @@ const createWebsiteSchema = z.object({
     .nullable()
     .optional()
     .transform((value) => value || null),
-  status: z.enum(["ACTIVE", "INACTIVE", "MAINTENANCE"]).default("ACTIVE"),
+
+  status: z.enum(WEBSITE_STATUSES).default("ACTIVE"),
 });
+
+function isWebsiteStatus(value: string): value is WebsiteStatus {
+  return WEBSITE_STATUSES.includes(value as WebsiteStatus);
+}
+
+function isWebsiteSortField(value: string): value is WebsiteSortField {
+  return WEBSITE_SORT_FIELDS.includes(value as WebsiteSortField);
+}
 
 export async function GET(request: Request) {
   const auth = await authenticateAdminRequest(request);
@@ -44,68 +71,194 @@ export async function GET(request: Request) {
     );
   }
 
-  const websites = await prisma.website.findMany({
-    where: auth.isSuperAdmin
-      ? undefined
-      : {
-          userRoles: {
-            some: {
-              userId: auth.user.id,
-              role: {
-                rolePermissions: {
-                  some: {
-                    permission: {
-                      name: "website.read",
-                    },
+  // ==========================================================
+  // QUERY PARAMS
+  // ==========================================================
+
+  const { searchParams } = new URL(request.url);
+
+  const pageParam = Number(searchParams.get("page") ?? "1");
+  const limitParam = Number(searchParams.get("limit") ?? "20");
+  const q = searchParams.get("q")?.trim().slice(0, 100) ?? "";
+  const statusParam = searchParams.get("status")?.trim().toUpperCase() ?? "";
+  const sortParam = searchParams.get("sort")?.trim() ?? "createdAt";
+  const orderParam = searchParams.get("order")?.trim().toLowerCase() ?? "desc";
+  const page = Number.isInteger(pageParam) && pageParam > 0 ? pageParam : 1;
+  const limit =
+    Number.isInteger(limitParam) && limitParam > 0
+      ? Math.min(limitParam, 100)
+      : 20;
+  const status = isWebsiteStatus(statusParam) ? statusParam : undefined;
+  const sort: WebsiteSortField = isWebsiteSortField(sortParam)
+    ? sortParam
+    : "createdAt";
+  const order: SortOrder = orderParam === "asc" ? "asc" : "desc";
+  const skip = (page - 1) * limit;
+
+  // ==========================================================
+  // ACCESS FILTER
+  // ==========================================================
+
+  const accessWhere = auth.isSuperAdmin
+    ? {}
+    : {
+        userRoles: {
+          some: {
+            userId: auth.user.id,
+
+            role: {
+              rolePermissions: {
+                some: {
+                  permission: {
+                    name: "website.read",
                   },
                 },
               },
             },
           },
         },
+      };
 
-    orderBy: {
-      name: "asc",
-    },
+  // ==========================================================
+  // SEARCH
+  // ==========================================================
 
-    select: {
-      id: true,
-      name: true,
-      slug: true,
-      description: true,
-      domain: true,
-      status: true,
-      createdAt: true,
-      updatedAt: true,
+  const searchWhere = q
+    ? {
+        OR: [
+          {
+            name: {
+              contains: q,
+              mode: "insensitive" as const,
+            },
+          },
 
-      userRoles: {
-        where: {
-          userId: auth.user.id,
-        },
+          {
+            slug: {
+              contains: q,
+              mode: "insensitive" as const,
+            },
+          },
 
-        select: {
-          role: {
-            select: {
-              id: true,
-              name: true,
-              description: true,
-              scope: true,
+          {
+            domain: {
+              contains: q,
+              mode: "insensitive" as const,
+            },
+          },
+        ],
+      }
+    : {};
+
+  // ==========================================================
+  // STATUS
+  // ==========================================================
+
+  const statusWhere = status
+    ? {
+        status,
+      }
+    : {};
+
+  // ==========================================================
+  // FINAL WHERE
+  // ==========================================================
+
+  const where = {
+    AND: [accessWhere, searchWhere, statusWhere],
+  };
+
+  // ==========================================================
+  // SORT
+  // ==========================================================
+
+  const orderBy =
+    sort === "name"
+      ? {
+          name: order,
+        }
+      : sort === "domain"
+        ? {
+            domain: order,
+          }
+        : sort === "status"
+          ? {
+              status: order,
+            }
+          : sort === "members"
+            ? {
+                userRoles: {
+                  _count: order,
+                },
+              }
+            : sort === "videos"
+              ? {
+                  videos: {
+                    _count: order,
+                  },
+                }
+              : {
+                  createdAt: order,
+                };
+
+  // ==========================================================
+  // DATABASE
+  // ==========================================================
+
+  const [websites, total] = await Promise.all([
+    prisma.website.findMany({
+      where,
+      orderBy,
+      skip,
+      take: limit,
+
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        description: true,
+        domain: true,
+        status: true,
+        createdAt: true,
+        updatedAt: true,
+
+        userRoles: {
+          where: {
+            userId: auth.user.id,
+          },
+
+          select: {
+            role: {
+              select: {
+                id: true,
+                name: true,
+                description: true,
+                scope: true,
+              },
             },
           },
         },
-      },
 
-      _count: {
-        select: {
-          userRoles: true,
-          videos: true,
-          categories: true,
-          views: true,
-          apiClients: true,
+        _count: {
+          select: {
+            userRoles: true,
+            videos: true,
+            categories: true,
+            views: true,
+            apiClients: true,
+          },
         },
       },
-    },
-  });
+    }),
+
+    prisma.website.count({
+      where,
+    }),
+  ]);
+
+  // ==========================================================
+  // RESPONSE
+  // ==========================================================
 
   return NextResponse.json({
     success: true,
@@ -131,6 +284,13 @@ export async function GET(request: Request) {
       createdAt: website.createdAt,
       updatedAt: website.updatedAt,
     })),
+
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: total === 0 ? 0 : Math.ceil(total / limit),
+    },
   });
 }
 
@@ -181,6 +341,10 @@ export async function POST(request: Request) {
 
   const data = parsed.data;
 
+  // ==========================================================
+  // DUPLICATE CHECK
+  // ==========================================================
+
   const duplicate = await prisma.website.findFirst({
     where: {
       OR: [
@@ -208,6 +372,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         success: false,
+
         error:
           duplicate.slug === data.slug
             ? "Website slug already exists"
@@ -218,6 +383,10 @@ export async function POST(request: Request) {
       },
     );
   }
+
+  // ==========================================================
+  // CREATE
+  // ==========================================================
 
   const website = await prisma.website.create({
     data: {

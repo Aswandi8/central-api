@@ -37,12 +37,6 @@ enum VideoStatus {
   ARCHIVED
 }
 
-enum SocialShareStatus {
-  DRAFT
-  ACTIVE
-  ARCHIVED
-}
-
 enum Visibility {
   PUBLIC
   PRIVATE
@@ -298,7 +292,6 @@ model Website {
 
   videos       VideoWebsite[]
   categories   Category[]
-  socialShares SocialShare[]
 
   views View[]
 
@@ -425,66 +418,6 @@ model VideoCategory {
   @@id([videoId, categoryId])
   @@index([categoryId])
   @@map("video_category")
-}
-
-// ============================================================
-// SOCIAL SHARE
-// ============================================================
-
-model SocialShare {
-  id String @id @default(cuid())
-
-  // Website A: pemilik public share URL.
-  //
-  // Contoh:
-  // https://web-a.com/s/video-123
-  websiteId String
-  website   Website @relation(fields: [websiteId], references: [id], onDelete: Cascade)
-
-  title       String
-  slug        String
-  description String?
-
-  // Asset eksternal.
-  //
-  // Central API hanya menyimpan URL.
-  // Menghapus SocialShare TIDAK menghapus asset CDN.
-  videoUrl  String
-  thumbnail String
-
-  // Optional future/pre-generated social thumbnail.
-  //
-  // Jika null, public website dapat menggunakan `thumbnail`.
-  shareThumbnail String?
-
-  // Durasi video sebenarnya dalam detik jika diketahui.
-  duration Int?
-
-  // Label durasi visual yang ditampilkan pada thumbnail.
-  //
-  // Contoh:
-  // 12:48
-  // 01:12:48
-  //
-  // Tidak harus sama dengan `duration`.
-  displayDuration String?
-
-  // Tujuan akhir setelah share page dibuka.
-  //
-  // Contoh:
-  // https://web-bb.com/s/video-123
-  targetUrl String
-
-  status SocialShareStatus @default(DRAFT)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([websiteId, slug])
-  @@index([websiteId])
-  @@index([status])
-  @@index([createdAt])
-  @@map("social_share")
 }
 
 // ============================================================

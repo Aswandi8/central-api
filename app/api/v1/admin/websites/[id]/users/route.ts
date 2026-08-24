@@ -6,14 +6,24 @@ import { isProtectedUser } from "@/lib/admin/protected-user";
 import { prisma } from "@/lib/prisma";
 
 interface RouteContext {
-  params: Promise<{
-    id: string;
-  }>;
+  params: Promise<{ id: string }>;
 }
+
+const MEMBER_STATUSES = ["ACTIVE", "INACTIVE", "SUSPENDED", "BANNED"] as const;
+const MEMBER_SORT_FIELDS = [
+  "name",
+  "email",
+  "role",
+  "status",
+  "createdAt",
+] as const;
+
+type MemberStatus = (typeof MEMBER_STATUSES)[number];
+type MemberSortField = (typeof MEMBER_SORT_FIELDS)[number];
+type SortOrder = "asc" | "desc";
 
 const memberSchema = z.object({
   userId: z.string().trim().min(1, "User is required"),
-
   roleId: z.string().trim().min(1, "Role is required"),
 });
 
@@ -31,6 +41,14 @@ const ROLE_PRIORITY: Record<string, number> = {
   AUDITOR: 40,
 };
 
+function isMemberStatus(value: string): value is MemberStatus {
+  return MEMBER_STATUSES.includes(value as MemberStatus);
+}
+
+function isMemberSortField(value: string): value is MemberSortField {
+  return MEMBER_SORT_FIELDS.includes(value as MemberSortField);
+}
+
 function getRolePriority(roleName: string): number {
   return ROLE_PRIORITY[roleName] ?? 10;
 }
@@ -40,27 +58,16 @@ function canManageRole(
   actorRoleName: string | undefined,
   targetRoleName: string,
 ): boolean {
-  if (isSuperAdmin) {
-    return true;
-  }
-
-  if (!actorRoleName) {
-    return false;
-  }
-
-  if (actorRoleName === "ADMIN") {
-    return true;
-  }
+  if (isSuperAdmin) return true;
+  if (!actorRoleName) return false;
+  if (actorRoleName === "ADMIN") return true;
 
   return getRolePriority(targetRoleName) < getRolePriority(actorRoleName);
 }
 
 async function getTargetUser(userId: string) {
   return prisma.user.findUnique({
-    where: {
-      id: userId,
-    },
-
+    where: { id: userId },
     select: {
       id: true,
       name: true,
@@ -69,13 +76,10 @@ async function getTargetUser(userId: string) {
       image: true,
       status: true,
       banned: true,
-
       globalRoles: {
         select: {
           role: {
-            select: {
-              name: true,
-            },
+            select: { name: true },
           },
         },
       },
@@ -85,10 +89,7 @@ async function getTargetUser(userId: string) {
 
 async function getWebsiteRole(roleId: string) {
   return prisma.role.findUnique({
-    where: {
-      id: roleId,
-    },
-
+    where: { id: roleId },
     select: {
       id: true,
       name: true,
@@ -97,6 +98,10 @@ async function getWebsiteRole(roleId: string) {
     },
   });
 }
+
+// ============================================================
+// GET
+// ============================================================
 
 export async function GET(request: Request, context: RouteContext) {
   const { id: websiteId } = await context.params;
@@ -109,111 +114,136 @@ export async function GET(request: Request, context: RouteContext) {
 
   if (!auth.success) {
     return NextResponse.json(
-      {
-        success: false,
-        error: auth.error,
-      },
-      {
-        status: auth.status,
-      },
+      { success: false, error: auth.error },
+      { status: auth.status },
     );
   }
 
   const website = await prisma.website.findUnique({
-    where: {
-      id: websiteId,
-    },
-
-    select: {
-      id: true,
-      name: true,
-    },
+    where: { id: websiteId },
+    select: { id: true, name: true },
   });
 
   if (!website) {
     return NextResponse.json(
-      {
-        success: false,
-        error: "Website not found",
-      },
-      {
-        status: 404,
-      },
+      { success: false, error: "Website not found" },
+      { status: 404 },
     );
   }
 
   const { searchParams } = new URL(request.url);
 
   const pageParam = Number(searchParams.get("page") ?? "1");
-
   const limitParam = Number(searchParams.get("limit") ?? "20");
-
   const q = searchParams.get("q")?.trim().slice(0, 100) ?? "";
-
+  const statusParam = searchParams.get("status")?.trim().toUpperCase() ?? "";
+  const verifiedParam =
+    searchParams.get("verified")?.trim().toUpperCase() ?? "";
   const roleId = searchParams.get("role")?.trim() || undefined;
+  const sortParam = searchParams.get("sort")?.trim() ?? "name";
+  const orderParam = searchParams.get("order")?.trim().toLowerCase() ?? "asc";
 
   const page = Number.isInteger(pageParam) && pageParam > 0 ? pageParam : 1;
-
   const limit =
     Number.isInteger(limitParam) && limitParam > 0
       ? Math.min(limitParam, 100)
       : 20;
 
+  const status = isMemberStatus(statusParam) ? statusParam : undefined;
+  const verified =
+    verifiedParam === "VERIFIED"
+      ? true
+      : verifiedParam === "UNVERIFIED"
+        ? false
+        : undefined;
+
+  const sort: MemberSortField = isMemberSortField(sortParam)
+    ? sortParam
+    : "name";
+
+  const order: SortOrder = orderParam === "desc" ? "desc" : "asc";
+
   const where = {
-    websiteId,
+    AND: [
+      { websiteId },
 
-    ...(roleId
-      ? {
-          roleId,
-        }
-      : {}),
+      ...(roleId ? [{ roleId }] : []),
 
-    ...(q
-      ? {
-          user: {
-            OR: [
-              {
-                name: {
-                  contains: q,
-                  mode: "insensitive" as const,
-                },
+      ...(status
+        ? [
+            {
+              user: {
+                status,
               },
-              {
-                email: {
-                  contains: q,
-                  mode: "insensitive" as const,
-                },
+            },
+          ]
+        : []),
+
+      ...(verified !== undefined
+        ? [
+            {
+              user: {
+                emailVerified: verified,
               },
-            ],
-          },
-        }
-      : {}),
+            },
+          ]
+        : []),
+
+      ...(q
+        ? [
+            {
+              OR: [
+                {
+                  user: {
+                    name: {
+                      contains: q,
+                      mode: "insensitive" as const,
+                    },
+                  },
+                },
+                {
+                  user: {
+                    email: {
+                      contains: q,
+                      mode: "insensitive" as const,
+                    },
+                  },
+                },
+                {
+                  role: {
+                    name: {
+                      contains: q,
+                      mode: "insensitive" as const,
+                    },
+                  },
+                },
+              ],
+            },
+          ]
+        : []),
+    ],
   };
 
-  const [assignments, total] = await prisma.$transaction([
+  const orderBy =
+    sort === "email"
+      ? { user: { email: order } }
+      : sort === "role"
+        ? { role: { name: order } }
+        : sort === "status"
+          ? { user: { status: order } }
+          : sort === "createdAt"
+            ? { createdAt: order }
+            : { user: { name: order } };
+
+  const [assignments, total] = await Promise.all([
     prisma.userWebsiteRole.findMany({
       where,
-
       skip: (page - 1) * limit,
       take: limit,
-
-      orderBy: [
-        {
-          role: {
-            name: "asc",
-          },
-        },
-        {
-          user: {
-            name: "asc",
-          },
-        },
-      ],
-
+      orderBy,
       select: {
         createdAt: true,
         updatedAt: true,
-
         user: {
           select: {
             id: true,
@@ -225,7 +255,6 @@ export async function GET(request: Request, context: RouteContext) {
             banned: true,
           },
         },
-
         role: {
           select: {
             id: true,
@@ -237,36 +266,32 @@ export async function GET(request: Request, context: RouteContext) {
       },
     }),
 
-    prisma.userWebsiteRole.count({
-      where,
-    }),
+    prisma.userWebsiteRole.count({ where }),
   ]);
 
   return NextResponse.json({
     success: true,
-
     data: assignments.map((assignment) => ({
       user: {
         ...assignment.user,
         banned: assignment.user.banned ?? false,
       },
-
       role: assignment.role,
-
       assignedAt: assignment.createdAt,
-
       updatedAt: assignment.updatedAt,
     })),
-
     pagination: {
       page,
       limit,
       total,
-
       totalPages: total === 0 ? 0 : Math.ceil(total / limit),
     },
   });
 }
+
+// ============================================================
+// POST
+// ============================================================
 
 export async function POST(request: Request, context: RouteContext) {
   const { id: websiteId } = await context.params;
@@ -279,13 +304,8 @@ export async function POST(request: Request, context: RouteContext) {
 
   if (!auth.success) {
     return NextResponse.json(
-      {
-        success: false,
-        error: auth.error,
-      },
-      {
-        status: auth.status,
-      },
+      { success: false, error: auth.error },
+      { status: auth.status },
     );
   }
 
@@ -295,13 +315,8 @@ export async function POST(request: Request, context: RouteContext) {
     body = await request.json();
   } catch {
     return NextResponse.json(
-      {
-        success: false,
-        error: "Invalid JSON body",
-      },
-      {
-        status: 400,
-      },
+      { success: false, error: "Invalid JSON body" },
+      { status: 400 },
     );
   }
 
@@ -313,9 +328,7 @@ export async function POST(request: Request, context: RouteContext) {
         success: false,
         error: parsed.error.issues[0]?.message ?? "Invalid member data",
       },
-      {
-        status: 400,
-      },
+      { status: 400 },
     );
   }
 
@@ -324,41 +337,23 @@ export async function POST(request: Request, context: RouteContext) {
   const [user, role, website] = await Promise.all([
     getTargetUser(userId),
     getWebsiteRole(roleId),
-
     prisma.website.findUnique({
-      where: {
-        id: websiteId,
-      },
-
-      select: {
-        id: true,
-        name: true,
-        slug: true,
-      },
+      where: { id: websiteId },
+      select: { id: true, name: true, slug: true },
     }),
   ]);
 
   if (!website) {
     return NextResponse.json(
-      {
-        success: false,
-        error: "Website not found",
-      },
-      {
-        status: 404,
-      },
+      { success: false, error: "Website not found" },
+      { status: 404 },
     );
   }
 
   if (!user) {
     return NextResponse.json(
-      {
-        success: false,
-        error: "User not found",
-      },
-      {
-        status: 404,
-      },
+      { success: false, error: "User not found" },
+      { status: 404 },
     );
   }
 
@@ -368,21 +363,14 @@ export async function POST(request: Request, context: RouteContext) {
         success: false,
         error: "SUPER_ADMIN does not require website role assignments",
       },
-      {
-        status: 403,
-      },
+      { status: 403 },
     );
   }
 
   if (!role) {
     return NextResponse.json(
-      {
-        success: false,
-        error: "Role not found",
-      },
-      {
-        status: 404,
-      },
+      { success: false, error: "Role not found" },
+      { status: 404 },
     );
   }
 
@@ -392,9 +380,7 @@ export async function POST(request: Request, context: RouteContext) {
         success: false,
         error: "Only WEBSITE roles may be assigned to a website",
       },
-      {
-        status: 400,
-      },
+      { status: 400 },
     );
   }
 
@@ -408,9 +394,7 @@ export async function POST(request: Request, context: RouteContext) {
         success: false,
         error: `You cannot assign the ${role.name} role`,
       },
-      {
-        status: 403,
-      },
+      { status: 403 },
     );
   }
 
@@ -421,12 +405,9 @@ export async function POST(request: Request, context: RouteContext) {
         websiteId,
       },
     },
-
     select: {
       role: {
-        select: {
-          name: true,
-        },
+        select: { name: true },
       },
     },
   });
@@ -437,9 +418,7 @@ export async function POST(request: Request, context: RouteContext) {
         success: false,
         error: `User is already assigned to this website as ${existing.role.name}`,
       },
-      {
-        status: 409,
-      },
+      { status: 409 },
     );
   }
 
@@ -449,10 +428,8 @@ export async function POST(request: Request, context: RouteContext) {
       websiteId,
       roleId,
     },
-
     select: {
       createdAt: true,
-
       user: {
         select: {
           id: true,
@@ -464,7 +441,6 @@ export async function POST(request: Request, context: RouteContext) {
           banned: true,
         },
       },
-
       role: {
         select: {
           id: true,
@@ -473,7 +449,6 @@ export async function POST(request: Request, context: RouteContext) {
           scope: true,
         },
       },
-
       website: {
         select: {
           id: true,
@@ -488,24 +463,23 @@ export async function POST(request: Request, context: RouteContext) {
     {
       success: true,
       message: "Member assigned successfully",
-
       data: {
         user: {
           ...assignment.user,
           banned: assignment.user.banned ?? false,
         },
-
         role: assignment.role,
         website: assignment.website,
-
         assignedAt: assignment.createdAt,
       },
     },
-    {
-      status: 201,
-    },
+    { status: 201 },
   );
 }
+
+// ============================================================
+// PUT
+// ============================================================
 
 export async function PUT(request: Request, context: RouteContext) {
   const { id: websiteId } = await context.params;
@@ -518,13 +492,8 @@ export async function PUT(request: Request, context: RouteContext) {
 
   if (!auth.success) {
     return NextResponse.json(
-      {
-        success: false,
-        error: auth.error,
-      },
-      {
-        status: auth.status,
-      },
+      { success: false, error: auth.error },
+      { status: auth.status },
     );
   }
 
@@ -534,13 +503,8 @@ export async function PUT(request: Request, context: RouteContext) {
     body = await request.json();
   } catch {
     return NextResponse.json(
-      {
-        success: false,
-        error: "Invalid JSON body",
-      },
-      {
-        status: 400,
-      },
+      { success: false, error: "Invalid JSON body" },
+      { status: 400 },
     );
   }
 
@@ -552,9 +516,7 @@ export async function PUT(request: Request, context: RouteContext) {
         success: false,
         error: parsed.error.issues[0]?.message ?? "Invalid member data",
       },
-      {
-        status: 400,
-      },
+      { status: 400 },
     );
   }
 
@@ -568,7 +530,6 @@ export async function PUT(request: Request, context: RouteContext) {
           websiteId,
         },
       },
-
       select: {
         role: {
           select: {
@@ -580,30 +541,21 @@ export async function PUT(request: Request, context: RouteContext) {
     }),
 
     getTargetUser(userId),
+
     getWebsiteRole(roleId),
   ]);
 
   if (!assignment) {
     return NextResponse.json(
-      {
-        success: false,
-        error: "Website member not found",
-      },
-      {
-        status: 404,
-      },
+      { success: false, error: "Website member not found" },
+      { status: 404 },
     );
   }
 
   if (!user) {
     return NextResponse.json(
-      {
-        success: false,
-        error: "User not found",
-      },
-      {
-        status: 404,
-      },
+      { success: false, error: "User not found" },
+      { status: 404 },
     );
   }
 
@@ -613,21 +565,14 @@ export async function PUT(request: Request, context: RouteContext) {
         success: false,
         error: "SUPER_ADMIN website membership cannot be modified",
       },
-      {
-        status: 403,
-      },
+      { status: 403 },
     );
   }
 
   if (!targetRole) {
     return NextResponse.json(
-      {
-        success: false,
-        error: "Role not found",
-      },
-      {
-        status: 404,
-      },
+      { success: false, error: "Role not found" },
+      { status: 404 },
     );
   }
 
@@ -637,9 +582,7 @@ export async function PUT(request: Request, context: RouteContext) {
         success: false,
         error: "Only WEBSITE roles may be assigned to a website",
       },
-      {
-        status: 400,
-      },
+      { status: 400 },
     );
   }
 
@@ -652,13 +595,8 @@ export async function PUT(request: Request, context: RouteContext) {
     !canManageRole(auth.isSuperAdmin, actorRoleName, targetRole.name)
   ) {
     return NextResponse.json(
-      {
-        success: false,
-        error: "You cannot modify this member role",
-      },
-      {
-        status: 403,
-      },
+      { success: false, error: "You cannot modify this member role" },
+      { status: 403 },
     );
   }
 
@@ -669,14 +607,9 @@ export async function PUT(request: Request, context: RouteContext) {
         websiteId,
       },
     },
-
-    data: {
-      roleId,
-    },
-
+    data: { roleId },
     select: {
       updatedAt: true,
-
       user: {
         select: {
           id: true,
@@ -688,7 +621,6 @@ export async function PUT(request: Request, context: RouteContext) {
           banned: true,
         },
       },
-
       role: {
         select: {
           id: true,
@@ -703,19 +635,20 @@ export async function PUT(request: Request, context: RouteContext) {
   return NextResponse.json({
     success: true,
     message: "Member role updated successfully",
-
     data: {
       user: {
         ...updated.user,
         banned: updated.user.banned ?? false,
       },
-
       role: updated.role,
-
       updatedAt: updated.updatedAt,
     },
   });
 }
+
+// ============================================================
+// DELETE
+// ============================================================
 
 export async function DELETE(request: Request, context: RouteContext) {
   const { id: websiteId } = await context.params;
@@ -728,13 +661,8 @@ export async function DELETE(request: Request, context: RouteContext) {
 
   if (!auth.success) {
     return NextResponse.json(
-      {
-        success: false,
-        error: auth.error,
-      },
-      {
-        status: auth.status,
-      },
+      { success: false, error: auth.error },
+      { status: auth.status },
     );
   }
 
@@ -744,13 +672,8 @@ export async function DELETE(request: Request, context: RouteContext) {
     body = await request.json();
   } catch {
     return NextResponse.json(
-      {
-        success: false,
-        error: "Invalid JSON body",
-      },
-      {
-        status: 400,
-      },
+      { success: false, error: "Invalid JSON body" },
+      { status: 400 },
     );
   }
 
@@ -762,9 +685,7 @@ export async function DELETE(request: Request, context: RouteContext) {
         success: false,
         error: parsed.error.issues[0]?.message ?? "Invalid member data",
       },
-      {
-        status: 400,
-      },
+      { status: 400 },
     );
   }
 
@@ -778,12 +699,9 @@ export async function DELETE(request: Request, context: RouteContext) {
           websiteId,
         },
       },
-
       select: {
         role: {
-          select: {
-            name: true,
-          },
+          select: { name: true },
         },
       },
     }),
@@ -793,25 +711,15 @@ export async function DELETE(request: Request, context: RouteContext) {
 
   if (!assignment) {
     return NextResponse.json(
-      {
-        success: false,
-        error: "Website member not found",
-      },
-      {
-        status: 404,
-      },
+      { success: false, error: "Website member not found" },
+      { status: 404 },
     );
   }
 
   if (!user) {
     return NextResponse.json(
-      {
-        success: false,
-        error: "User not found",
-      },
-      {
-        status: 404,
-      },
+      { success: false, error: "User not found" },
+      { status: 404 },
     );
   }
 
@@ -821,9 +729,7 @@ export async function DELETE(request: Request, context: RouteContext) {
         success: false,
         error: "SUPER_ADMIN cannot be removed from a website",
       },
-      {
-        status: 403,
-      },
+      { status: 403 },
     );
   }
 
@@ -833,13 +739,8 @@ export async function DELETE(request: Request, context: RouteContext) {
 
   if (!canManageRole(auth.isSuperAdmin, actorRoleName, assignment.role.name)) {
     return NextResponse.json(
-      {
-        success: false,
-        error: "You cannot remove this website member",
-      },
-      {
-        status: 403,
-      },
+      { success: false, error: "You cannot remove this website member" },
+      { status: 403 },
     );
   }
 
@@ -855,7 +756,6 @@ export async function DELETE(request: Request, context: RouteContext) {
   return NextResponse.json({
     success: true,
     message: "Member removed from website successfully",
-
     data: {
       userId,
       websiteId,

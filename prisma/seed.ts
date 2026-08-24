@@ -126,27 +126,6 @@ const permissions = [
   },
 
   // ----------------------------------------------------------
-  // Social shares
-  // ----------------------------------------------------------
-
-  {
-    name: "social_share.read",
-    description: "View social shares",
-  },
-  {
-    name: "social_share.create",
-    description: "Create social shares",
-  },
-  {
-    name: "social_share.update",
-    description: "Update social shares",
-  },
-  {
-    name: "social_share.delete",
-    description: "Delete social shares",
-  },
-
-  // ----------------------------------------------------------
   // Categories
   // ----------------------------------------------------------
 
@@ -274,11 +253,6 @@ const rolePermissions = {
     "video.delete",
     "video.publish",
 
-    "social_share.read",
-    "social_share.create",
-    "social_share.update",
-    "social_share.delete",
-
     "category.read",
     "category.create",
     "category.update",
@@ -308,11 +282,6 @@ const rolePermissions = {
     "video.delete",
     "video.publish",
 
-    "social_share.read",
-    "social_share.create",
-    "social_share.update",
-    "social_share.delete",
-
     "category.read",
     "category.create",
     "category.update",
@@ -332,11 +301,6 @@ const rolePermissions = {
     "video.delete",
     "video.publish",
 
-    "social_share.read",
-    "social_share.create",
-    "social_share.update",
-    "social_share.delete",
-
     "category.read",
     "category.create",
     "category.update",
@@ -352,26 +316,12 @@ const rolePermissions = {
     "video.create",
     "video.update",
 
-    "social_share.read",
-    "social_share.create",
-    "social_share.update",
-
     "category.read",
     "category.create",
     "category.update",
   ],
 
-  DESIGNER: [
-    "website.read",
-
-    "video.read",
-    "video.update",
-
-    "social_share.read",
-    "social_share.update",
-
-    "category.read",
-  ],
+  DESIGNER: ["website.read", "video.read", "video.update", "category.read"],
 
   ANALYST: ["website.read", "view.read"],
 

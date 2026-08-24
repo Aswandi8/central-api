@@ -6,22 +6,24 @@ import { prisma } from "@/lib/prisma";
 // ============================================================
 
 export async function authenticateAdminRequest(request: Request) {
-  const session = await auth.api.getSession({
+  const authSession = await auth.api.getSession({
     headers: request.headers,
   });
 
-  if (!session?.user) {
+  if (!authSession?.user || !authSession?.session) {
     return {
       success: false as const,
       status: 401,
       error: "Authentication required",
+      code: "authentication-required",
     };
   }
 
   const user = await prisma.user.findUnique({
     where: {
-      id: session.user.id,
+      id: authSession.user.id,
     },
+
     include: {
       globalRoles: {
         include: {
@@ -44,6 +46,47 @@ export async function authenticateAdminRequest(request: Request) {
       success: false as const,
       status: 401,
       error: "User not found",
+      code: "user-not-found",
+    };
+  }
+
+  // ==========================================================
+  // ACCOUNT STATE
+  // ==========================================================
+
+  if (user.banned || user.status === "BANNED") {
+    return {
+      success: false as const,
+      status: 403,
+      error: "User account is banned",
+      code: "account-banned",
+    };
+  }
+
+  if (user.status === "SUSPENDED") {
+    return {
+      success: false as const,
+      status: 403,
+      error: "User account is suspended",
+      code: "account-suspended",
+    };
+  }
+
+  if (user.status === "INACTIVE") {
+    return {
+      success: false as const,
+      status: 403,
+      error: "User account is inactive",
+      code: "account-inactive",
+    };
+  }
+
+  if (!user.emailVerified) {
+    return {
+      success: false as const,
+      status: 403,
+      error: "Email is not verified",
+      code: "email-not-verified",
     };
   }
 
@@ -52,8 +95,13 @@ export async function authenticateAdminRequest(request: Request) {
       success: false as const,
       status: 403,
       error: "User account is not active",
+      code: "account-inactive",
     };
   }
+
+  // ==========================================================
+  // GLOBAL ROLES
+  // ==========================================================
 
   const globalRoles = user.globalRoles.map((assignment) => assignment.role);
 
@@ -61,9 +109,15 @@ export async function authenticateAdminRequest(request: Request) {
 
   return {
     success: true as const,
+
+    session: authSession.session,
+
     user,
+
     roles: globalRoles,
+
     globalRoles,
+
     isSuperAdmin,
   };
 }
@@ -79,17 +133,12 @@ export async function requireAdmin(request: Request) {
     return result;
   }
 
-  /*
-   * Saat ini SUPER_ADMIN adalah satu-satunya GLOBAL system role.
-   *
-   * ADMIN adalah WEBSITE role, sehingga tidak boleh dianggap
-   * sebagai global administrator.
-   */
   if (!result.isSuperAdmin) {
     return {
       success: false as const,
       status: 403,
       error: "Admin access required",
+      code: "admin-access-required",
     };
   }
 
@@ -125,6 +174,7 @@ export async function requirePermission(
       success: false as const,
       status: 403,
       error: `Permission required: ${permissionName}`,
+      code: "permission-required",
     };
   }
 
@@ -140,27 +190,31 @@ export async function requireWebsitePermission(
   websiteId: string,
   permissionName: string,
 ) {
-  const session = await auth.api.getSession({
+  const authSession = await auth.api.getSession({
     headers: request.headers,
   });
 
-  if (!session?.user) {
+  if (!authSession?.user || !authSession?.session) {
     return {
       success: false as const,
       status: 401,
       error: "Authentication required",
+      code: "authentication-required",
     };
   }
 
   const user = await prisma.user.findUnique({
     where: {
-      id: session.user.id,
+      id: authSession.user.id,
     },
+
     select: {
       id: true,
       name: true,
       email: true,
+      emailVerified: true,
       status: true,
+      banned: true,
 
       globalRoles: {
         select: {
@@ -170,6 +224,7 @@ export async function requireWebsitePermission(
               name: true,
               description: true,
               scope: true,
+
               rolePermissions: {
                 select: {
                   permission: {
@@ -190,6 +245,7 @@ export async function requireWebsitePermission(
         where: {
           websiteId,
         },
+
         select: {
           userId: true,
           websiteId: true,
@@ -216,6 +272,7 @@ export async function requireWebsitePermission(
               name: true,
               description: true,
               scope: true,
+
               rolePermissions: {
                 select: {
                   permission: {
@@ -239,6 +296,43 @@ export async function requireWebsitePermission(
       success: false as const,
       status: 401,
       error: "User not found",
+      code: "user-not-found",
+    };
+  }
+
+  if (user.banned || user.status === "BANNED") {
+    return {
+      success: false as const,
+      status: 403,
+      error: "User account is banned",
+      code: "account-banned",
+    };
+  }
+
+  if (user.status === "SUSPENDED") {
+    return {
+      success: false as const,
+      status: 403,
+      error: "User account is suspended",
+      code: "account-suspended",
+    };
+  }
+
+  if (user.status === "INACTIVE") {
+    return {
+      success: false as const,
+      status: 403,
+      error: "User account is inactive",
+      code: "account-inactive",
+    };
+  }
+
+  if (!user.emailVerified) {
+    return {
+      success: false as const,
+      status: 403,
+      error: "Email is not verified",
+      code: "email-not-verified",
     };
   }
 
@@ -247,6 +341,7 @@ export async function requireWebsitePermission(
       success: false as const,
       status: 403,
       error: "User account is not active",
+      code: "account-inactive",
     };
   }
 
@@ -264,17 +359,22 @@ export async function requireWebsitePermission(
 
   const websiteAssignment = user.websiteRoles[0] ?? null;
 
-  /*
-   * SUPER_ADMIN tidak membutuhkan UserWebsiteRole.
-   */
   if (isSuperAdmin) {
     return {
       success: true as const,
+
+      session: authSession.session,
+
       user,
+
       roles: globalRoles,
+
       globalRoles,
+
       isSuperAdmin,
+
       websiteId,
+
       websiteAssignment,
     };
   }
@@ -284,25 +384,18 @@ export async function requireWebsitePermission(
       success: false as const,
       status: 403,
       error: "Website access required",
+      code: "website-access-required",
     };
   }
 
-  /*
-   * Defensive validation.
-   *
-   * UserWebsiteRole hanya boleh menggunakan WEBSITE role.
-   */
   if (websiteAssignment.role.scope !== "WEBSITE") {
     return {
       success: false as const,
       status: 403,
       error: "Invalid website role assignment",
+      code: "invalid-website-role",
     };
   }
-
-  // ==========================================================
-  // WEBSITE PERMISSION
-  // ==========================================================
 
   const hasPermission = websiteAssignment.role.rolePermissions.some(
     (rolePermission) => rolePermission.permission.name === permissionName,
@@ -313,16 +406,25 @@ export async function requireWebsitePermission(
       success: false as const,
       status: 403,
       error: `Website permission required: ${permissionName}`,
+      code: "website-permission-required",
     };
   }
 
   return {
     success: true as const,
+
+    session: authSession.session,
+
     user,
+
     roles: globalRoles,
+
     globalRoles,
+
     isSuperAdmin,
+
     websiteId,
+
     websiteAssignment,
   };
 }
