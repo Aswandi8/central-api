@@ -32,7 +32,7 @@ const removeMemberSchema = z.object({
 });
 
 const ROLE_PRIORITY: Record<string, number> = {
-  ADMIN: 100,
+  WEBSITE_ADMIN: 100,
   TEAM_LEAD: 80,
   CONTENT_MANAGER: 60,
   EDITOR: 50,
@@ -60,7 +60,7 @@ function canManageRole(
 ): boolean {
   if (isSuperAdmin) return true;
   if (!actorRoleName) return false;
-  if (actorRoleName === "ADMIN") return true;
+  if (actorRoleName === "WEBSITE_ADMIN") return true;
 
   return getRolePriority(targetRoleName) < getRolePriority(actorRoleName);
 }

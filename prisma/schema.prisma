@@ -65,6 +65,24 @@ enum ApiClientStatus {
   REVOKED
 }
 
+enum ShortLinkStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum ShortLinkPreviewType {
+  NONE
+  IMAGE
+  VIDEO
+}
+
+enum ShortLinkVisitorType {
+  HUMAN
+  CRAWLER
+  BOT
+  UNKNOWN
+}
+
 // ============================================================
 // BETTER AUTH
 // ============================================================
@@ -92,6 +110,8 @@ model User {
   invitations UserInvitation[] @relation("InvitationUser")
 
   sentInvitations UserInvitation[] @relation("InvitationInviter")
+
+  createdShortLinks ShortLink[] @relation("ShortLinkCreatedBy")
 
   role       String?
   banned     Boolean?  @default(false)
@@ -290,8 +310,8 @@ model Website {
 
   invitations UserInvitation[]
 
-  videos       VideoWebsite[]
-  categories   Category[]
+  videos     VideoWebsite[]
+  categories Category[]
 
   views View[]
 
@@ -447,6 +467,79 @@ model View {
   @@index([createdAt])
   @@index([videoId, websiteId, createdAt])
   @@map("view")
+}
+
+// ============================================================
+// SHORTLINK
+// ============================================================
+
+model ShortLink {
+  id             String               @id @default(cuid())
+  slug           String               @unique
+  destinationUrl String
+  status         ShortLinkStatus      @default(ACTIVE)
+  previewType    ShortLinkPreviewType @default(NONE)
+
+  title       String?
+  description String?
+
+  thumbnailUrl       String?
+  thumbnailWidth     Int?
+  thumbnailHeight    Int?
+  thumbnailMimeType  String?
+  thumbnailSizeBytes Int?
+
+  previewVideoUrl        String?
+  previewVideoWidth      Int?
+  previewVideoHeight     Int?
+  previewVideoDurationMs Int?
+  previewVideoMimeType   String?
+  previewVideoSizeBytes  Int?
+
+  showPlayButton  Boolean @default(false)
+  displayDuration String?
+
+  clickCount Int @default(0)
+
+  createdById String?
+  createdBy   User?   @relation("ShortLinkCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  clicks ShortLinkClick[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([previewType])
+  @@index([createdById])
+  @@index([createdAt])
+  @@map("short_link")
+}
+
+model ShortLinkClick {
+  id          String               @id @default(cuid())
+  shortLinkId String
+  visitorType ShortLinkVisitorType @default(UNKNOWN)
+
+  ipHash    String?
+  referrer  String?
+  userAgent String?
+
+  country String?
+  device  String?
+  browser String?
+  os      String?
+
+  clickedAt DateTime @default(now())
+
+  shortLink ShortLink @relation(fields: [shortLinkId], references: [id], onDelete: Cascade)
+
+  @@index([shortLinkId])
+  @@index([clickedAt])
+  @@index([shortLinkId, clickedAt])
+  @@index([shortLinkId, visitorType, clickedAt])
+  @@index([shortLinkId, ipHash])
+  @@map("short_link_click")
 }
 
 // ============================================================

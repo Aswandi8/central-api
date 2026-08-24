@@ -1,5 +1,5 @@
 const ROLE_PRIORITY: Record<string, number> = {
-  ADMIN: 100,
+  WEBSITE_ADMIN: 100,
   TEAM_LEAD: 80,
   CONTENT_MANAGER: 60,
   EDITOR: 50,
@@ -8,7 +8,13 @@ const ROLE_PRIORITY: Record<string, number> = {
   AUDITOR: 40,
 };
 
-export function getRolePriority(roleName: string): number {
+interface CanAssignWebsiteRoleOptions {
+  isSuperAdmin: boolean;
+  actorRoleName?: string;
+  targetRoleName: string;
+}
+
+function getRolePriority(roleName: string): number {
   return ROLE_PRIORITY[roleName] ?? 10;
 }
 
@@ -16,11 +22,7 @@ export function canAssignWebsiteRole({
   isSuperAdmin,
   actorRoleName,
   targetRoleName,
-}: {
-  isSuperAdmin: boolean;
-  actorRoleName?: string;
-  targetRoleName: string;
-}): boolean {
+}: CanAssignWebsiteRoleOptions): boolean {
   if (isSuperAdmin) {
     return true;
   }
@@ -29,7 +31,7 @@ export function canAssignWebsiteRole({
     return false;
   }
 
-  if (actorRoleName === "ADMIN") {
+  if (actorRoleName === "WEBSITE_ADMIN") {
     return true;
   }
 

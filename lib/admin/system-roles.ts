@@ -1,6 +1,7 @@
 export const SYSTEM_ROLE_NAMES = [
   "SUPER_ADMIN",
   "ADMIN",
+  "WEBSITE_ADMIN",
   "TEAM_LEAD",
   "CONTENT_MANAGER",
   "EDITOR",

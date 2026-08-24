@@ -20,166 +20,91 @@ const permissions = [
   // Global users
   // ----------------------------------------------------------
 
-  {
-    name: "user.read",
-    description: "View global user accounts",
-  },
-  {
-    name: "user.create",
-    description: "Create global user accounts",
-  },
-  {
-    name: "user.update",
-    description: "Update global user accounts",
-  },
-  {
-    name: "user.delete",
-    description: "Delete global user accounts",
-  },
+  { name: "user.read", description: "View global user accounts" },
+  { name: "user.create", description: "Create global user accounts" },
+  { name: "user.update", description: "Update global user accounts" },
+  { name: "user.delete", description: "Delete global user accounts" },
 
   // ----------------------------------------------------------
   // Website members
   // ----------------------------------------------------------
 
-  {
-    name: "member.read",
-    description: "View members assigned to a website",
-  },
-  {
-    name: "member.invite",
-    description: "Invite members to a website",
-  },
+  { name: "member.read", description: "View members assigned to a website" },
+  { name: "member.invite", description: "Invite members to a website" },
   {
     name: "member.update",
     description: "Update member role or assignment within a website",
   },
-  {
-    name: "member.remove",
-    description: "Remove a member from a website",
-  },
+  { name: "member.remove", description: "Remove a member from a website" },
 
   // ----------------------------------------------------------
   // Roles
   // ----------------------------------------------------------
 
-  {
-    name: "role.read",
-    description: "View available roles",
-  },
-  {
-    name: "role.create",
-    description: "Create roles",
-  },
-  {
-    name: "role.update",
-    description: "Update roles",
-  },
-  {
-    name: "role.delete",
-    description: "Delete roles",
-  },
+  { name: "role.read", description: "View available roles" },
+  { name: "role.create", description: "Create roles" },
+  { name: "role.update", description: "Update roles" },
+  { name: "role.delete", description: "Delete roles" },
 
   // ----------------------------------------------------------
   // Websites
   // ----------------------------------------------------------
 
+  { name: "website.read", description: "View websites" },
+  { name: "website.create", description: "Create websites" },
+  { name: "website.update", description: "Update websites" },
+  { name: "website.delete", description: "Delete websites" },
+
+  // ----------------------------------------------------------
+  // Shortlinks
+  // ----------------------------------------------------------
+
   {
-    name: "website.read",
-    description: "View websites",
+    name: "shortlink.read",
+    description: "View shortlinks and shortlink analytics",
   },
-  {
-    name: "website.create",
-    description: "Create websites",
-  },
-  {
-    name: "website.update",
-    description: "Update websites",
-  },
-  {
-    name: "website.delete",
-    description: "Delete websites",
-  },
+  { name: "shortlink.create", description: "Create shortlinks" },
+  { name: "shortlink.update", description: "Update shortlinks" },
+  { name: "shortlink.delete", description: "Delete shortlinks" },
 
   // ----------------------------------------------------------
   // Videos
   // ----------------------------------------------------------
 
-  {
-    name: "video.read",
-    description: "View videos",
-  },
-  {
-    name: "video.create",
-    description: "Create videos",
-  },
-  {
-    name: "video.update",
-    description: "Update videos",
-  },
-  {
-    name: "video.delete",
-    description: "Delete videos",
-  },
-  {
-    name: "video.publish",
-    description: "Publish videos",
-  },
+  { name: "video.read", description: "View videos" },
+  { name: "video.create", description: "Create videos" },
+  { name: "video.update", description: "Update videos" },
+  { name: "video.delete", description: "Delete videos" },
+  { name: "video.publish", description: "Publish videos" },
 
   // ----------------------------------------------------------
   // Categories
   // ----------------------------------------------------------
 
-  {
-    name: "category.read",
-    description: "View categories",
-  },
-  {
-    name: "category.create",
-    description: "Create categories",
-  },
-  {
-    name: "category.update",
-    description: "Update categories",
-  },
-  {
-    name: "category.delete",
-    description: "Delete categories",
-  },
+  { name: "category.read", description: "View categories" },
+  { name: "category.create", description: "Create categories" },
+  { name: "category.update", description: "Update categories" },
+  { name: "category.delete", description: "Delete categories" },
 
   // ----------------------------------------------------------
   // Analytics
   // ----------------------------------------------------------
 
-  {
-    name: "view.read",
-    description: "View video analytics",
-  },
+  { name: "view.read", description: "View video analytics" },
 
   // ----------------------------------------------------------
   // Audit
   // ----------------------------------------------------------
 
-  {
-    name: "audit.read",
-    description: "View audit logs",
-  },
+  { name: "audit.read", description: "View audit logs" },
 
   // ----------------------------------------------------------
   // API clients
   // ----------------------------------------------------------
 
-  {
-    name: "api_client.read",
-    description: "View API clients",
-  },
-  {
-    name: "api_client.create",
-    description: "Create API clients",
-  },
-  {
-    name: "api_client.revoke",
-    description: "Revoke API clients",
-  },
+  { name: "api_client.read", description: "View API clients" },
+  { name: "api_client.create", description: "Create API clients" },
+  { name: "api_client.revoke", description: "Revoke API clients" },
 ] as const;
 
 // ============================================================
@@ -194,6 +119,11 @@ const roleDefinitions = [
   },
   {
     name: "ADMIN",
+    scope: "GLOBAL" as const,
+    description: "Global administrative access to permitted Veyra resources",
+  },
+  {
+    name: "WEBSITE_ADMIN",
     scope: "WEBSITE" as const,
     description: "Administrative access to an assigned website",
   },
@@ -237,6 +167,13 @@ const rolePermissions = {
   SUPER_ADMIN: permissions.map((permission) => permission.name),
 
   ADMIN: [
+    "shortlink.read",
+    "shortlink.create",
+    "shortlink.update",
+    "shortlink.delete",
+  ],
+
+  WEBSITE_ADMIN: [
     "member.read",
     "member.invite",
     "member.update",
@@ -329,6 +266,77 @@ const rolePermissions = {
 } as const;
 
 // ============================================================
+// LEGACY ADMIN MIGRATION
+// ============================================================
+
+async function migrateLegacyAdminRole() {
+  const legacyAdmin = await prisma.role.findUnique({
+    where: { name: "ADMIN" },
+    select: {
+      id: true,
+      scope: true,
+    },
+  });
+
+  if (!legacyAdmin || legacyAdmin.scope === "GLOBAL") {
+    return;
+  }
+
+  console.log("↻ Migrating legacy WEBSITE ADMIN → WEBSITE_ADMIN...");
+
+  const globalAssignments = await prisma.userRole.count({
+    where: { roleId: legacyAdmin.id },
+  });
+
+  if (globalAssignments > 0) {
+    throw new Error(
+      `Legacy ADMIN has ${globalAssignments} invalid global assignments. Resolve them before migration.`,
+    );
+  }
+
+  const existingWebsiteAdmin = await prisma.role.findUnique({
+    where: { name: "WEBSITE_ADMIN" },
+    select: { id: true },
+  });
+
+  if (!existingWebsiteAdmin) {
+    await prisma.role.update({
+      where: { id: legacyAdmin.id },
+      data: {
+        name: "WEBSITE_ADMIN",
+        scope: "WEBSITE",
+        description: "Administrative access to an assigned website",
+      },
+    });
+
+    console.log("✓ Legacy ADMIN renamed to WEBSITE_ADMIN");
+    return;
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.userWebsiteRole.updateMany({
+      where: { roleId: legacyAdmin.id },
+      data: { roleId: existingWebsiteAdmin.id },
+    });
+
+    await tx.userInvitation.updateMany({
+      where: { roleId: legacyAdmin.id },
+      data: { roleId: existingWebsiteAdmin.id },
+    });
+
+    await tx.rolePermission.deleteMany({
+      where: { roleId: legacyAdmin.id },
+    });
+
+    await tx.role.delete({
+      where: { id: legacyAdmin.id },
+    });
+  });
+
+  console.log("✓ Legacy ADMIN assignments migrated to WEBSITE_ADMIN");
+}
+
+// ============================================================
 // HELPERS
 // ============================================================
 
@@ -381,6 +389,12 @@ async function main() {
   console.log("🌱 Starting database seed...");
 
   // ==========================================================
+  // LEGACY ROLE MIGRATION
+  // ==========================================================
+
+  await migrateLegacyAdminRole();
+
+  // ==========================================================
   // PERMISSIONS
   // ==========================================================
 
@@ -388,12 +402,8 @@ async function main() {
 
   for (const permissionData of permissions) {
     const permission = await prisma.permission.upsert({
-      where: {
-        name: permissionData.name,
-      },
-      update: {
-        description: permissionData.description,
-      },
+      where: { name: permissionData.name },
+      update: { description: permissionData.description },
       create: {
         name: permissionData.name,
         description: permissionData.description,
@@ -413,9 +423,7 @@ async function main() {
 
   for (const roleData of roleDefinitions) {
     const role = await prisma.role.upsert({
-      where: {
-        name: roleData.name,
-      },
+      where: { name: roleData.name },
       update: {
         description: roleData.description,
         scope: roleData.scope,
@@ -463,9 +471,7 @@ async function main() {
   }
 
   const superAdminCount = await prisma.userRole.count({
-    where: {
-      roleId: superAdminRoleId,
-    },
+    where: { roleId: superAdminRoleId },
   });
 
   if (superAdminCount > 1) {
